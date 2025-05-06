@@ -55,7 +55,7 @@ func loadMenuEntriesFromCSV(path string) ([]MenuEntry, error) {
 			continue
 		}
 		if len(rec) < 21 {
-			log.Printf("Attention: Ligne %d n'a pas assez de colonnes (%d/21)", i, len(rec))
+			log.Printf("Warning: Line %d does not have enough columns (%d/21)", i, len(rec))
 			continue
 		}
 
@@ -82,7 +82,7 @@ func loadMenuEntriesFromCSV(path string) ([]MenuEntry, error) {
 			Unk40:       parseUint16(rec[20]),
 		}
 		entryID := parseUint32(rec[0])
-		log.Printf("Entrée %d chargée (ID de référence: %d): JumpID=%d, AreaID=%d, Pos=(%.2f,%.2f,%.2f)",
+		log.Printf("Entry %d loaded (Reference ID: %d): JumpID=%d, AreaID=%d, Pos=(%.2f,%.2f,%.2f)",
 			i, entryID, entry.JumpID, entry.AreaID, entry.PosX, entry.PosY, entry.PosZ)
 		entries = append(entries, entry)
 	}
@@ -92,32 +92,36 @@ func loadMenuEntriesFromCSV(path string) ([]MenuEntry, error) {
 func InjectData() {
 	entries, err := loadMenuEntriesFromCSV("output/menu_entries.csv")
 	if err != nil {
-		log.Fatalf("Erreur chargement CSV : %v", err)
+		log.Fatalf("Error loading CSV: %v", err)
 	}
-	log.Printf("Nombre d'entrées chargées depuis le CSV: %d", len(entries))
+	log.Printf("Number of entries loaded from CSV: %d", len(entries))
 
 	data, err := os.ReadFile("input/mhfjmp.bin")
 	if err != nil {
-		log.Fatalf("Erreur lecture mhfjmp.bin : %v", err)
+		log.Fatalf("Error reading mhfjmp.bin: %v", err)
 	}
-	log.Printf("Taille du fichier mhfjmp.bin: %d bytes", len(data))
+	log.Printf("Size of mhfjmp.bin file: %d bytes", len(data))
 
 	soMenuEntry := 0xA80C
 	const menuEntrySize = 56
 
 	existingEntries := (len(data) - soMenuEntry) / menuEntrySize
-	log.Printf("Nombre d'entrées existantes: %d", existingEntries)
+	log.Printf("Number of existing entries: %d", existingEntries)
 
 	totalEntriesSize := (existingEntries + len(entries)) * menuEntrySize
-	log.Printf("Taille totale nécessaire pour les entrées: %d bytes", totalEntriesSize)
+	log.Printf("Total size needed for entries: %d bytes", totalEntriesSize)
 
 	textSectionOffset := soMenuEntry + totalEntriesSize
-	log.Printf("Offset de la section texte: %d", textSectionOffset)
+	log.Printf("Text section offset: %d", textSectionOffset)
 
 	totalSize := textSectionOffset + 4096
 	output := make([]byte, totalSize)
 	copy(output, data)
-	log.Printf("Taille du buffer de sortie: %d", len(output))
+	log.Printf("Output buffer size: %d", len(output))
+
+	// Replace data at offset 0x00 with F1 0C
+	output[0] = 0xF1
+	output[1] = 0x0C
 
 	headerSize := 17
 	for i := 0; i < 16; i++ {
@@ -126,7 +130,7 @@ func InjectData() {
 	output[len(data)+16] = 0xFF
 
 	soMenuEntry = len(data) + headerSize
-	log.Printf("Nouvel offset de début des entrées après header: %d", soMenuEntry)
+	log.Printf("New entry start offset after header: %d", soMenuEntry)
 
 	var stringSection []byte
 	var textOffsets []uint32
@@ -142,14 +146,14 @@ func InjectData() {
 
 		textOffsets = append(textOffsets, titleOffset, descriptionOffset)
 	}
-	log.Printf("Taille de la section texte: %d", len(stringSection))
+	log.Printf("Text section size: %d", len(stringSection))
 
 	for i, entry := range entries {
 		base := soMenuEntry + (i * menuEntrySize)
-		log.Printf("Écriture de l'entrée %d à l'offset %d", i, base)
+		log.Printf("Writing entry %d at offset %d", i, base)
 
 		if base+menuEntrySize > len(output) {
-			log.Fatalf("Buffer trop petit pour l'entrée %d (offset %d + %d > %d)",
+			log.Fatalf("Buffer too small for entry %d (offset %d + %d > %d)",
 				i, base, menuEntrySize, len(output))
 		}
 
@@ -179,10 +183,10 @@ func InjectData() {
 
 	err = os.WriteFile("output/mhfjmp_patched.bin", output, 0644)
 	if err != nil {
-		log.Fatalf("Erreur d'écriture : %v", err)
+		log.Fatalf("Error writing: %v", err)
 	}
 
-	fmt.Println("✅ Injection terminée dans output/mhfjmp_patched.bin")
+	fmt.Println("✅ Injection completed in output/mhfjmp_patched.bin")
 }
 
 func encodeShiftJIS(str string) []byte {
@@ -195,7 +199,7 @@ func encodeShiftJIS(str string) []byte {
 func parseUint32(s string) uint32 {
 	v, err := strconv.ParseUint(s, 10, 32)
 	if err != nil {
-		log.Printf("Erreur parsing uint32 '%s': %v", s, err)
+		log.Printf("Error parsing uint32 '%s': %v", s, err)
 		return 0
 	}
 	return uint32(v)
@@ -204,7 +208,7 @@ func parseUint32(s string) uint32 {
 func parseUint16(s string) uint16 {
 	v, err := strconv.ParseUint(s, 10, 16)
 	if err != nil {
-		log.Printf("Erreur parsing uint16 '%s': %v", s, err)
+		log.Printf("Error parsing uint16 '%s': %v", s, err)
 		return 0
 	}
 	return uint16(v)
@@ -213,7 +217,7 @@ func parseUint16(s string) uint16 {
 func parseUint8(s string) uint8 {
 	v, err := strconv.ParseUint(s, 10, 8)
 	if err != nil {
-		log.Printf("Erreur parsing uint8 '%s': %v", s, err)
+		log.Printf("Error parsing uint8 '%s': %v", s, err)
 		return 0
 	}
 	return uint8(v)
@@ -222,7 +226,7 @@ func parseUint8(s string) uint8 {
 func parseFloat32(s string) float32 {
 	v, err := strconv.ParseFloat(s, 32)
 	if err != nil {
-		log.Printf("Erreur parsing float32 '%s': %v", s, err)
+		log.Printf("Error parsing float32 '%s': %v", s, err)
 		return 0
 	}
 	return float32(v)
