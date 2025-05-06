@@ -2,8 +2,6 @@
 
 A tool for extracting and injecting menu entries in Monster Hunter Frontier Z (MHFZ) binary files.
 
-(Disclaimer you still have to edit the original pointer to make it works)
-
 ## Features
 
 - Extract menu entries from `mhfjmp.bin` to CSV format
