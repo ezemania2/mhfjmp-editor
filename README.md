@@ -59,7 +59,7 @@ The menu entries CSV file contains the following columns:
 - AreaID
 - AreaID2
 - AreaID3
-- Unk18
+- Rotation
 - PosX
 - PosY
 - PosZ
@@ -67,7 +67,9 @@ The menu entries CSV file contains the following columns:
 - PosX1
 - PosY1
 - PosZ1
-- Unk38
+- Rotation1
+- Title
+- Description
 
 ### Area Entries CSV
 The area entries CSV file contains the following columns:
