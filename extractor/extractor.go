@@ -8,6 +8,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"golang.org/x/text/encoding/japanese"
 )
@@ -22,17 +23,26 @@ type MenuEntry struct {
 	PosX        float32
 	PosY        float32
 	PosZ        float32
-	Unk28       uint8
-	Unk29       uint8
-	Unk30       uint16
+	Rotation    uint32
 	PosX1       float32
 	PosY1       float32
 	PosZ1       float32
-	Unk38       uint8
-	Unk39       uint8
-	Unk40       uint16
+	Rotation1   uint32
 	Title       string
 	Description string
+}
+
+type AreaEntry struct {
+	Index uint16
+	Flags uint16
+}
+
+type Area struct {
+	pEntryData   uint32
+	lenEntryData uint32
+	pStageIds    uint32
+	entry        []AreaEntry
+	stageIds     []uint16
 }
 
 func ExtractData() {
@@ -46,15 +56,20 @@ func ExtractData() {
 		log.Fatalf("Error creating output directory: %v", err)
 	}
 
-	if err := processCSV(outputDir, "menu_entries", []string{"ID", "Title", "Description", "JumpID", "Unk0C", "AreaID", "AreaID2", "AreaID3", "Unk18", "PosX", "PosY", "PosZ", "Unk28", "Unk29", "Unk30", "PosX1", "PosY1", "PosZ1", "Unk38", "Unk39", "Unk40"}); err != nil {
+	if err := processCSV(outputDir, "menu_entries", []string{"ID", "Title", "Description", "JumpID", "Unk0C", "AreaID", "AreaID2", "AreaID3", "Unk18", "PosX", "PosY", "PosZ", "Rotation", "PosX1", "PosY1", "PosZ1", "Rotation1"}); err != nil {
 		log.Fatalf("Error processing CSV: %v", err)
 	}
+
+	if err := processCSV(outputDir, "area_entries", []string{"AreaIndex", "lenEntryData", "AreaEntries", "StageIds"}); err != nil {
+		log.Fatalf("Error processing CSV: %v", err)
+	}
+
 }
 
 func MenuEntryData(writer *csv.Writer, br *BinaryReader) error {
 	var menuEntries []MenuEntry
 	var soMenuEntry uint32 = 0x0007A0
-	var endMenuEntry uint32 = 0x000CD7
+	//var endMenuEntry uint32 = 0x000CDF
 
 	// Seek to menu entries position
 	_, err := br.BaseStream.Seek(int64(soMenuEntry), 0)
@@ -63,7 +78,7 @@ func MenuEntryData(writer *csv.Writer, br *BinaryReader) error {
 	}
 
 	// Calculate number of entries
-	count := (endMenuEntry - soMenuEntry) / 56 // Each entry is 56 bytes
+	count := uint32(24) // There are 24 entries, each 56 bytes
 
 	// Read entries
 	for i := uint32(0); i < count; i++ {
@@ -105,17 +120,9 @@ func MenuEntryData(writer *csv.Writer, br *BinaryReader) error {
 		if err != nil {
 			return fmt.Errorf("failed to read PosZ: %w", err)
 		}
-		entry.Unk28, err = br.ReadUInt8()
+		entry.Rotation, err = br.ReadUInt32()
 		if err != nil {
-			return fmt.Errorf("failed to read Unk28: %w", err)
-		}
-		entry.Unk29, err = br.ReadUInt8()
-		if err != nil {
-			return fmt.Errorf("failed to read Unk29: %w", err)
-		}
-		entry.Unk30, err = br.ReadUInt16()
-		if err != nil {
-			return fmt.Errorf("failed to read Unk30: %w", err)
+			return fmt.Errorf("failed to read Rotation: %w", err)
 		}
 		entry.PosX1, err = br.ReadFloat32()
 		if err != nil {
@@ -129,17 +136,9 @@ func MenuEntryData(writer *csv.Writer, br *BinaryReader) error {
 		if err != nil {
 			return fmt.Errorf("failed to read PosZ1: %w", err)
 		}
-		entry.Unk38, err = br.ReadUInt8()
+		entry.Rotation1, err = br.ReadUInt32()
 		if err != nil {
-			return fmt.Errorf("failed to read Unk38: %w", err)
-		}
-		entry.Unk39, err = br.ReadUInt8()
-		if err != nil {
-			return fmt.Errorf("failed to read Unk39: %w", err)
-		}
-		entry.Unk40, err = br.ReadUInt16()
-		if err != nil {
-			return fmt.Errorf("failed to read Unk40: %w", err)
+			return fmt.Errorf("failed to read Rotation1: %w", err)
 		}
 
 		entry.Title, err = StringFromPointer(br)
@@ -168,15 +167,11 @@ func MenuEntryData(writer *csv.Writer, br *BinaryReader) error {
 			fmt.Sprint(entry.PosX),
 			fmt.Sprint(entry.PosY),
 			fmt.Sprint(entry.PosZ),
-			fmt.Sprint(entry.Unk28),
-			fmt.Sprint(entry.Unk29),
-			fmt.Sprint(entry.Unk30),
+			fmt.Sprint(entry.Rotation),
 			fmt.Sprint(entry.PosX1),
 			fmt.Sprint(entry.PosY1),
 			fmt.Sprint(entry.PosZ1),
-			fmt.Sprint(entry.Unk38),
-			fmt.Sprint(entry.Unk39),
-			fmt.Sprint(entry.Unk40),
+			fmt.Sprint(entry.Rotation1),
 		}
 		if err := writer.Write(record); err != nil {
 			return fmt.Errorf("error writing record to CSV: %w", err)
@@ -184,6 +179,89 @@ func MenuEntryData(writer *csv.Writer, br *BinaryReader) error {
 	}
 
 	fmt.Println("Data extraction to CSV completed successfully.")
+	return nil
+}
+
+func ReadAreas(writer *csv.Writer, br *BinaryReader) error {
+	// 1. Se placer à l'offset 0x04 et lire le pointeur de base
+	_, err := br.BaseStream.Seek(0x04, 0)
+	if err != nil {
+		return fmt.Errorf("failed to seek to 0x04: %w", err)
+	}
+	baseOffset, err := br.ReadUInt32()
+	if err != nil {
+		return fmt.Errorf("failed to read base pointer at 0x04: %w", err)
+	}
+
+	for i := 0; i < 4; i++ {
+		offset := int64(baseOffset) + int64(i*0x0C)
+		_, err := br.BaseStream.Seek(offset, 0)
+		if err != nil {
+			return fmt.Errorf("failed to seek to Area offset %d: %w", i, err)
+		}
+
+		area := &Area{}
+		area.pEntryData, err = br.ReadUInt32()
+		if err != nil {
+			return fmt.Errorf("failed to read pEntryData: %w", err)
+		}
+		area.lenEntryData, err = br.ReadUInt32()
+		if err != nil {
+			return fmt.Errorf("failed to read lenEntryData: %w", err)
+		}
+		area.pStageIds, err = br.ReadUInt32()
+		if err != nil {
+			return fmt.Errorf("failed to read pStageIds: %w", err)
+		}
+
+		// Lire les AreaEntry
+		area.entry = make([]AreaEntry, area.lenEntryData)
+		areaEntriesStr := ""
+		if area.lenEntryData > 0 && area.pEntryData > 0 {
+			curPos, _ := br.BaseStream.Seek(0, 1)
+			br.BaseStream.Seek(int64(area.pEntryData), 0)
+			for j := uint32(0); j < area.lenEntryData; j++ {
+				idx, _ := br.ReadUInt16()
+				flags, _ := br.ReadUInt16()
+				area.entry[j] = AreaEntry{Index: idx, Flags: flags}
+				areaEntriesStr += fmt.Sprintf("[%d,%d] ", idx, flags)
+			}
+			br.BaseStream.Seek(curPos, 0)
+		}
+
+		// Lire les StageIds jusqu'à 0
+		area.stageIds = nil
+		stageIdsList := []string{}
+		if area.pStageIds > 0 {
+			curPos, _ := br.BaseStream.Seek(0, 1)
+			br.BaseStream.Seek(int64(area.pStageIds), 0)
+			for {
+				id, _ := br.ReadUInt16()
+				if id == 0 {
+					break
+				}
+				area.stageIds = append(area.stageIds, id)
+				stageIdsList = append(stageIdsList, fmt.Sprintf("%d", id))
+			}
+			br.BaseStream.Seek(curPos, 0)
+		}
+		stageIdsStr := ""
+		if len(stageIdsList) > 0 {
+			stageIdsStr = strings.Join(stageIdsList, ",")
+		}
+
+		record := []string{
+			fmt.Sprint(i + 1),
+			//fmt.Sprint(area.pEntryData),
+			fmt.Sprint(area.lenEntryData),
+			//fmt.Sprint(area.pStageIds),
+			areaEntriesStr,
+			stageIdsStr,
+		}
+		if err := writer.Write(record); err != nil {
+			return fmt.Errorf("error writing record to CSV: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -336,6 +414,16 @@ func processCSV(path, fileName string, header []string) error {
 		err = MenuEntryData(writer, brInput)
 		if err != nil {
 			return fmt.Errorf("error extracting menu entry data: %w", err)
+		}
+	case "area_entries":
+		brInput, err := getBinaryReader("input/mhfjmp.bin")
+		if err != nil {
+			return fmt.Errorf("error obtaining binary reader for area entries: %w", err)
+		}
+		defer brInput.Close()
+		err = ReadAreas(writer, brInput)
+		if err != nil {
+			return fmt.Errorf("error extracting area entry data: %w", err)
 		}
 	}
 

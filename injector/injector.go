@@ -8,10 +8,24 @@ import (
 	"math"
 	"os"
 	"strconv"
+	"strings"
 
 	"golang.org/x/text/encoding/japanese"
 	"golang.org/x/text/transform"
 )
+
+type AreaEntry struct {
+	Index uint16
+	Flags uint16
+}
+
+type Area struct {
+	pEntryData   uint32
+	lenEntryData uint32
+	pStageIds    uint32
+	entry        []AreaEntry
+	stageIds     []uint16
+}
 
 type MenuEntry struct {
 	JumpID      uint32
@@ -23,15 +37,11 @@ type MenuEntry struct {
 	PosX        float32
 	PosY        float32
 	PosZ        float32
-	Unk28       uint8
-	Unk29       uint8
-	Unk30       uint16
+	Unk28       uint32
 	PosX1       float32
 	PosY1       float32
 	PosZ1       float32
-	Unk38       uint8
-	Unk39       uint8
-	Unk40       uint16
+	Unk38       uint32
 	Title       string
 	Description string
 }
@@ -52,10 +62,10 @@ func loadMenuEntriesFromCSV(path string) ([]MenuEntry, error) {
 	var entries []MenuEntry
 	for i, rec := range records {
 		if i == 0 {
-			continue
+			continue // Skip header
 		}
-		if len(rec) < 21 {
-			log.Printf("Warning: Line %d does not have enough columns (%d/21)", i, len(rec))
+		if len(rec) < 17 {
+			log.Printf("Warning: Line %d does not have enough columns (%d/17)", i, len(rec))
 			continue
 		}
 
@@ -71,22 +81,100 @@ func loadMenuEntriesFromCSV(path string) ([]MenuEntry, error) {
 			PosX:        parseFloat32(rec[9]),
 			PosY:        parseFloat32(rec[10]),
 			PosZ:        parseFloat32(rec[11]),
-			Unk28:       parseUint8(rec[12]),
-			Unk29:       parseUint8(rec[13]),
-			Unk30:       parseUint16(rec[14]),
-			PosX1:       parseFloat32(rec[15]),
-			PosY1:       parseFloat32(rec[16]),
-			PosZ1:       parseFloat32(rec[17]),
-			Unk38:       parseUint8(rec[18]),
-			Unk39:       parseUint8(rec[19]),
-			Unk40:       parseUint16(rec[20]),
+			Unk28:       parseUint32(rec[12]),
+			PosX1:       parseFloat32(rec[13]),
+			PosY1:       parseFloat32(rec[14]),
+			PosZ1:       parseFloat32(rec[15]),
+			Unk38:       parseUint32(rec[16]),
 		}
-		entryID := parseUint32(rec[0])
-		log.Printf("Entry %d loaded (Reference ID: %d): JumpID=%d, AreaID=%d, Pos=(%.2f,%.2f,%.2f)",
-			i, entryID, entry.JumpID, entry.AreaID, entry.PosX, entry.PosY, entry.PosZ)
+
+		log.Printf("Entry %d loaded: JumpID=%d, AreaID=%d, Pos=(%.2f,%.2f,%.2f)",
+			i, entry.JumpID, entry.AreaID, entry.PosX, entry.PosY, entry.PosZ)
 		entries = append(entries, entry)
 	}
 	return entries, nil
+}
+
+func loadAreaEntriesFromCSV(path string) ([]Area, uint32, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer file.Close()
+
+	reader := csv.NewReader(file)
+	records, err := reader.ReadAll()
+	if err != nil {
+		return nil, 0, err
+	}
+
+	var areas []Area
+	var numAreas uint32 = 0
+
+	for i, rec := range records {
+		if i == 0 {
+			continue // Skip header
+		}
+		if len(rec) < 4 {
+			log.Printf("Warning: Line %d does not have enough columns (%d/4)", i, len(rec))
+			continue
+		}
+
+		// Read AreaIndex from first column
+		areaIndex := parseUint32(rec[0])
+		// Update numAreas with the last AreaIndex found
+		numAreas = areaIndex
+		log.Printf("Found AreaIndex: %d", areaIndex)
+
+		area := Area{
+			lenEntryData: parseUint32(rec[1]),
+			entry:        parseAreaEntries(rec[2]),
+			stageIds:     parseStageIds(rec[3]),
+		}
+
+		log.Printf("Area %d loaded: Entries=%d, StageIds=%d", i, len(area.entry), len(area.stageIds))
+		areas = append(areas, area)
+	}
+
+	log.Printf("Total areas loaded: %d (using last AreaIndex: %d)", len(areas), numAreas)
+	return areas, numAreas, nil
+}
+
+func parseAreaEntries(s string) []AreaEntry {
+	var entries []AreaEntry
+	// Split by spaces only, keeping the [%s,%s] pairs intact
+	parts := strings.Fields(s)
+	for _, part := range parts {
+		var idx, flags uint16
+		// Remove brackets and split by comma
+		part = strings.Trim(part, "[]")
+		values := strings.Split(part, ",")
+		if len(values) == 2 {
+			idx = parseUint16(values[0])
+			flags = parseUint16(values[1])
+			entries = append(entries, AreaEntry{Index: idx, Flags: flags})
+		} else {
+			log.Printf("Warning: Invalid entry format '%s', expected [idx,flags]", part)
+		}
+	}
+	return entries
+}
+
+func parseStageIds(s string) []uint16 {
+	var ids []uint16
+	// Split by both spaces and commas
+	parts := strings.FieldsFunc(s, func(r rune) bool {
+		return r == ' ' || r == ','
+	})
+	for _, part := range parts {
+		id, err := strconv.ParseUint(part, 10, 16)
+		if err != nil {
+			log.Printf("Warning: Error parsing stage ID '%s': %v", part, err)
+			continue
+		}
+		ids = append(ids, uint16(id))
+	}
+	return ids
 }
 
 func InjectData() {
@@ -96,45 +184,74 @@ func InjectData() {
 	}
 	log.Printf("Number of entries loaded from CSV: %d", len(entries))
 
+	areas, numAreas, err := loadAreaEntriesFromCSV("output/area_entries.csv")
+	if err != nil {
+		log.Fatalf("Error loading area entries: %v", err)
+	}
+	log.Printf("Number of areas loaded from CSV: %d", len(areas))
+
 	data, err := os.ReadFile("input/mhfjmp.bin")
 	if err != nil {
 		log.Fatalf("Error reading mhfjmp.bin: %v", err)
 	}
 	log.Printf("Size of mhfjmp.bin file: %d bytes", len(data))
 
-	soMenuEntry := 0xA80C
+	// Calculate menu entry section offset
+	soMenuEntry := len(data) + 17 // Original file size + header size
 	const menuEntrySize = 56
 
-	existingEntries := (len(data) - soMenuEntry) / menuEntrySize
+	existingEntries := 0 // We're not using existing entries anymore
 	log.Printf("Number of existing entries: %d", existingEntries)
 
-	totalEntriesSize := (existingEntries + len(entries)) * menuEntrySize
+	totalEntriesSize := len(entries) * menuEntrySize
 	log.Printf("Total size needed for entries: %d bytes", totalEntriesSize)
 
+	// Calculate text section offset after menu entries
 	textSectionOffset := soMenuEntry + totalEntriesSize
 	log.Printf("Text section offset: %d", textSectionOffset)
 
-	totalSize := textSectionOffset + 4096
+	// Calculate total size needed for areas
+	var totalAreaSize uint32
+	for _, area := range areas {
+		areaSize := 12 + uint32(len(area.entry))*4 + uint32(len(area.stageIds))*2 + 2
+		totalAreaSize += areaSize
+	}
+
+	// Calculate area section offset after text section
+	areaSectionOffset := textSectionOffset + 3072 + 6 // Reserve 3KB for text section + 6 bytes padding
+	log.Printf("Area section offset: %d", areaSectionOffset)
+
+	// Calculate total size needed for the entire file
+	totalSize := areaSectionOffset + int(totalAreaSize)
+	log.Printf("Total size needed: %d bytes (Text section: %d, Area section: %d)",
+		totalSize, 3072, totalAreaSize)
+
 	output := make([]byte, totalSize)
 	copy(output, data)
 	log.Printf("Output buffer size: %d", len(output))
 
-	// Replace data at offset 0x00 with F1 0C
-	output[0] = 0xF1
-	output[1] = 0x0C
+	// Calculate dynamic pointer to menu entries
+	menuEntryPointer := uint32(soMenuEntry)
+	log.Printf("Menu entry pointer: 0x%X", menuEntryPointer)
 
-	headerSize := 17
+	// Write dynamic pointer at offset 0x00
+	binary.LittleEndian.PutUint16(output[0x00:], uint16(menuEntryPointer))
+	binary.LittleEndian.PutUint16(output[0x02:], uint16(menuEntryPointer>>16))
+
+	// Write number of area entries at offset 0x08
+	log.Printf("Number of area entries: %d", numAreas)
+	binary.LittleEndian.PutUint32(output[0x08:], numAreas)
+
 	for i := 0; i < 16; i++ {
 		output[len(data)+i] = 0x00
 	}
 	output[len(data)+16] = 0xFF
 
-	soMenuEntry = len(data) + headerSize
-	log.Printf("New entry start offset after header: %d", soMenuEntry)
-
+	// Write menu entries
 	var stringSection []byte
 	var textOffsets []uint32
 
+	// First, collect all text offsets
 	for _, entry := range entries {
 		titleOffset := uint32(textSectionOffset + len(stringSection))
 		stringSection = append(stringSection, encodeShiftJIS(entry.Title)...)
@@ -146,14 +263,14 @@ func InjectData() {
 
 		textOffsets = append(textOffsets, titleOffset, descriptionOffset)
 	}
-	log.Printf("Text section size: %d", len(stringSection))
 
+	// Then write menu entries
 	for i, entry := range entries {
 		base := soMenuEntry + (i * menuEntrySize)
-		log.Printf("Writing entry %d at offset %d", i, base)
+		log.Printf("Writing menu entry %d at offset %d", i, base)
 
 		if base+menuEntrySize > len(output) {
-			log.Fatalf("Buffer too small for entry %d (offset %d + %d > %d)",
+			log.Fatalf("Buffer too small for menu entry %d (offset %d + %d > %d)",
 				i, base, menuEntrySize, len(output))
 		}
 
@@ -166,20 +283,85 @@ func InjectData() {
 		writeFloat32(output[base+16:], entry.PosX)
 		writeFloat32(output[base+20:], entry.PosY)
 		writeFloat32(output[base+24:], entry.PosZ)
-		output[base+28] = entry.Unk28
-		output[base+29] = entry.Unk29
-		binary.LittleEndian.PutUint16(output[base+30:], entry.Unk30)
+		binary.LittleEndian.PutUint32(output[base+28:], entry.Unk28)
 		writeFloat32(output[base+32:], entry.PosX1)
 		writeFloat32(output[base+36:], entry.PosY1)
 		writeFloat32(output[base+40:], entry.PosZ1)
-		output[base+44] = entry.Unk38
-		output[base+45] = entry.Unk39
-		binary.LittleEndian.PutUint16(output[base+46:], entry.Unk40)
+		binary.LittleEndian.PutUint32(output[base+44:], entry.Unk38)
 		binary.LittleEndian.PutUint32(output[base+48:], textOffsets[i*2])
 		binary.LittleEndian.PutUint32(output[base+52:], textOffsets[i*2+1])
+
+		log.Printf("Menu entry %d written: JumpID=%d, AreaID=%d, Pos=(%.2f,%.2f,%.2f)",
+			i, entry.JumpID, entry.AreaID, entry.PosX, entry.PosY, entry.PosZ)
 	}
 
+	// Write text section
 	copy(output[textSectionOffset:], stringSection)
+	log.Printf("Text section written at offset %d (size: %d)", textSectionOffset, len(stringSection))
+
+	// Write areas
+	headersOffset := areaSectionOffset
+	dataOffset := headersOffset + len(areas)*12 // 12 bytes per header
+
+	// First pass: write all headers
+	var cumulativeOffset uint32 = uint32(dataOffset)
+	for i, area := range areas {
+		headerOffset := headersOffset + i*12
+		// Calculate data offset for this area
+		dataOffsetForArea := cumulativeOffset
+		stageIdsOffset := dataOffsetForArea + uint32(len(area.entry)*4)
+
+		log.Printf("Writing header for area %d at offset %d (data at %d)", i, headerOffset, dataOffsetForArea)
+		binary.LittleEndian.PutUint32(output[headerOffset:], dataOffsetForArea)
+		binary.LittleEndian.PutUint32(output[headerOffset+4:], uint32(len(area.entry)))
+		binary.LittleEndian.PutUint32(output[headerOffset+8:], stageIdsOffset)
+
+		// Calculate next area's offset
+		areaSize := uint32(len(area.entry)*4 + len(area.stageIds)*2 + 2) // +2 for terminator
+		cumulativeOffset += areaSize
+	}
+
+	// Second pass: write all data
+	currentDataOffset := dataOffset
+	for i, area := range areas {
+		log.Printf("Writing data for area %d at offset %d", i, currentDataOffset)
+
+		// Write entries
+		for j, entry := range area.entry {
+			entryOffset := currentDataOffset + j*4
+			binary.LittleEndian.PutUint16(output[entryOffset:], entry.Index)
+			binary.LittleEndian.PutUint16(output[entryOffset+2:], entry.Flags)
+		}
+
+		// Write stage IDs
+		stageIdsOffset := currentDataOffset + len(area.entry)*4
+		log.Printf("Writing stage IDs for area %d at offset %d (count: %d)", i, stageIdsOffset, len(area.stageIds))
+		for j, stageId := range area.stageIds {
+			stageIdOffset := stageIdsOffset + j*2
+			if stageIdOffset+2 > len(output) {
+				log.Fatalf("Buffer too small for stage ID %d in area %d (offset %d + 2 > %d)",
+					j, i, stageIdOffset, len(output))
+			}
+			binary.LittleEndian.PutUint16(output[stageIdOffset:], stageId)
+		}
+
+		// Add terminating uint16 (0) after stageIds
+		terminatorOffset := stageIdsOffset + len(area.stageIds)*2
+		if terminatorOffset+2 > len(output) {
+			log.Fatalf("Buffer too small for terminator in area %d (offset %d + 2 > %d)",
+				i, terminatorOffset, len(output))
+		}
+		log.Printf("Writing terminator for area %d at offset %d", i, terminatorOffset)
+		binary.LittleEndian.PutUint16(output[terminatorOffset:], 0)
+
+		// Update current data offset for next area
+		currentDataOffset = terminatorOffset + 2 // Add 2 bytes for the terminator
+		log.Printf("Next area data will start at offset %d", currentDataOffset)
+	}
+
+	// Update header with new offsets
+	binary.LittleEndian.PutUint32(output[0x04:], uint32(areaSectionOffset))
+	binary.LittleEndian.PutUint32(output[0x08:], numAreas)
 
 	err = os.WriteFile("output/mhfjmp_patched.bin", output, 0644)
 	if err != nil {
