@@ -59,11 +59,11 @@ The menu entries CSV file contains the following columns:
 - AreaID
 - AreaID2
 - AreaID3
-- Rotation
+- AreaID4
 - PosX
 - PosY
 - PosZ
-- Unk28
+- Rotation
 - PosX1
 - PosY1
 - PosZ1
